@@ -71,10 +71,6 @@ object Async {
       }
     }
     withRetry(1)
-
-    val p = Promise[A]()
-    p.completeWith(makeAsyncComputation())
-
   }
 
 
