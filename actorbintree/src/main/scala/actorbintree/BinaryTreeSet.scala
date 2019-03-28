@@ -4,13 +4,17 @@
 package actorbintree
 
 import akka.actor._
+import akka.event.LoggingReceive
+
 import scala.collection.immutable.Queue
 
 object BinaryTreeSet {
 
   trait Operation {
     def requester: ActorRef
+
     def id: Int
+
     def elem: Int
   }
 
@@ -36,7 +40,7 @@ object BinaryTreeSet {
     */
   case class Remove(requester: ActorRef, id: Int, elem: Int) extends Operation
 
-  /** Request to perform garbage collection*/
+  /** Request to perform garbage collection */
   case object GC
 
   /** Holds the answer to the Contains request with identifier `id`.
@@ -51,6 +55,7 @@ object BinaryTreeSet {
 
 
 class BinaryTreeSet extends Actor {
+
   import BinaryTreeSet._
   import BinaryTreeNode._
 
@@ -66,7 +71,9 @@ class BinaryTreeSet extends Actor {
 
   // optional
   /** Accepts `Operation` and `GC` messages. */
-  val normal: Receive = { case _ => ??? }
+  val normal: Receive = LoggingReceive {
+    case op: Operation => root ! op
+  }
 
   // optional
   /** Handles messages while garbage collection is performed.
@@ -78,18 +85,22 @@ class BinaryTreeSet extends Actor {
 }
 
 object BinaryTreeNode {
+
   trait Position
 
   case object Left extends Position
+
   case object Right extends Position
 
   case class CopyTo(treeNode: ActorRef)
+
   case object CopyFinished
 
-  def props(elem: Int, initiallyRemoved: Boolean) = Props(classOf[BinaryTreeNode],  elem, initiallyRemoved)
+  def props(elem: Int, initiallyRemoved: Boolean) = Props(classOf[BinaryTreeNode], elem, initiallyRemoved)
 }
 
 class BinaryTreeNode(val elem: Int, initiallyRemoved: Boolean) extends Actor {
+
   import BinaryTreeNode._
   import BinaryTreeSet._
 
@@ -101,7 +112,45 @@ class BinaryTreeNode(val elem: Int, initiallyRemoved: Boolean) extends Actor {
 
   // optional
   /** Handles `Operation` messages and `CopyTo` requests. */
-  val normal: Receive = { case _ => ??? }
+  val normal: Receive = LoggingReceive {
+    case toCheck@Contains(requester, id, e) =>
+      if (elem == e)
+        requester ! ContainsResult(id, !removed)
+      else if (e < elem)
+        subtrees.get(Left).fold(requester ! ContainsResult(id, false))(_ ! toCheck)
+      else
+        subtrees.get(Right).fold(requester ! ContainsResult(id, false))(_ ! toCheck)
+    case toRemove@Remove(requester, id, e) =>
+      if (elem == e) {
+        removed = true
+        requester ! OperationFinished(id)
+      }
+      else if (e < elem)
+        subtrees.get(Left).fold(requester ! OperationFinished(id))(_ ! toRemove)
+      else
+        subtrees.get(Right).fold(requester ! OperationFinished(id))(_ ! toRemove)
+
+    case toInsert@Insert(requester, id, e) =>
+      if (e < elem)
+        subtrees.get(Left).fold {
+          subtrees = subtrees + (Left -> context.actorOf(BinaryTreeNode.props(e, false)))
+          requester ! OperationFinished(id)
+        } {
+          _ ! toInsert
+        }
+      else if (e > elem)
+        subtrees.get(Right).fold {
+          subtrees = subtrees + (Right -> context.actorOf(BinaryTreeNode.props(e, false)))
+          requester ! OperationFinished(id)
+        } {
+          _ ! toInsert
+        }
+      else {
+        removed = false
+        requester ! OperationFinished(id)
+      }
+  }
+
 
   // optional
   /** `expected` is the set of ActorRefs whose replies we are waiting for,
